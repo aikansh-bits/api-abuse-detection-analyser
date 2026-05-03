@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 
 const COLORS = {
   rule: "#4F8EF7",
@@ -19,7 +19,7 @@ function useAnimatedNumber(target, duration = 800) {
       if (progress < 1) requestAnimationFrame(step);
     };
     requestAnimationFrame(step);
-  }, [target]);
+  }, [target, duration]);
   return value;
 }
 
