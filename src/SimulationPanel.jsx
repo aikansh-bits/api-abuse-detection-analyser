@@ -1,4 +1,7 @@
-import { useState, useRef, useEffect } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { sendDetectionRequest } from "./lib/api";
+import { LEGITIMATE, MALICIOUS, pick, sliderModeToHeader } from "./lib/scenarios";
+import { RUN_ID } from "./lib/config";
 
 const COLORS = { rule: "#4F8EF7", ai: "#34D399", danger: "#F87171", warn: "#FBBF24", neutral: "#8B92A5" };
 
@@ -14,38 +17,61 @@ function StatusDot({ active, color }) {
 }
 
 function ResultEntry({ entry, index }) {
-  const [visible, setVisible] = useState(false);
-  useEffect(() => { const t = setTimeout(() => setVisible(true), 30); return () => clearTimeout(t); }, []);
-  const isMal = entry.result === "Malicious";
+  const isBlocked = entry.decision === "block";
+  const groundIsMal = entry.groundTruth === "malicious";
+  const correct = (groundIsMal && isBlocked) || (!groundIsMal && !isBlocked);
+  const verdictLabel = isBlocked ? "Blocked" : "Allowed";
+  const verdictColor = isBlocked ? COLORS.danger : COLORS.ai;
+  const sourceLabel = entry.decisionSource === "rule" ? "rule"
+    : entry.decisionSource === "ai" ? "ai"
+    : entry.decisionSource === "fallback" ? "fallback"
+    : "—";
+  const latency = entry.detectionLatencyMs ?? entry.clientLatencyMs;
+
   return (
     <div style={{
-      display: "flex", alignItems: "center", gap: 12, padding: "10px 14px",
-      background: isMal ? "rgba(248,113,113,0.05)" : "rgba(52,211,153,0.04)",
-      border: `1px solid ${isMal ? "rgba(248,113,113,0.15)" : "rgba(52,211,153,0.12)"}`,
+      display: "flex", alignItems: "center", gap: 10, padding: "10px 14px",
+      background: isBlocked ? "rgba(248,113,113,0.05)" : "rgba(52,211,153,0.04)",
+      border: `1px solid ${isBlocked ? "rgba(248,113,113,0.15)" : "rgba(52,211,153,0.12)"}`,
       borderRadius: 10,
-      opacity: visible ? 1 : 0,
-      transform: visible ? "translateY(0)" : "translateY(-8px)",
-      transition: "all 0.3s cubic-bezier(0.4,0,0.2,1)",
       fontFamily: "'IBM Plex Mono', monospace",
     }}>
-      <span style={{ fontSize: 10, color: "#4B5563", minWidth: 28 }}>#{String(index + 1).padStart(3, "0")}</span>
+      <span style={{ fontSize: 10, color: "#4B5563", minWidth: 36 }}>#{String(index + 1).padStart(3, "0")}</span>
       <span style={{
         fontSize: 11, fontWeight: 600, padding: "2px 10px", borderRadius: 6,
-        background: isMal ? "rgba(248,113,113,0.15)" : "rgba(52,211,153,0.15)",
-        color: isMal ? COLORS.danger : COLORS.ai,
-        minWidth: 80, textAlign: "center",
-      }}>{entry.result}</span>
-      <span style={{ fontSize: 11, color: COLORS.neutral, flex: 1 }}>{entry.traffic} traffic</span>
-      <span style={{ fontSize: 11, color: "#6B7280" }}>{entry.system}</span>
-      <span style={{ fontSize: 11, color: entry.latency < 20 ? COLORS.rule : "#A78BFA", minWidth: 50, textAlign: "right" }}>
-        {entry.latency} ms
+        background: isBlocked ? "rgba(248,113,113,0.15)" : "rgba(52,211,153,0.15)",
+        color: verdictColor,
+        minWidth: 76, textAlign: "center",
+      }}>{verdictLabel}</span>
+      <span style={{
+        fontSize: 10, color: groundIsMal ? COLORS.danger : COLORS.ai,
+        opacity: 0.7, minWidth: 70,
+      }}>{groundIsMal ? "✱ malicious" : "✓ legitimate"}</span>
+      <span style={{ fontSize: 11, color: COLORS.neutral, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {entry.label}
       </span>
+      <span style={{
+        fontSize: 10, padding: "2px 8px", borderRadius: 4,
+        background: "rgba(255,255,255,0.04)", color: "#9CA3AF",
+        minWidth: 60, textAlign: "center",
+      }}>src: {sourceLabel}</span>
+      <span style={{
+        fontSize: 11, color: latency != null && latency < 5 ? COLORS.rule : "#A78BFA",
+        minWidth: 64, textAlign: "right",
+      }}>
+        {latency != null ? `${latency.toFixed(2)} ms` : "—"}
+      </span>
+      <span style={{
+        fontSize: 10, opacity: correct ? 0.6 : 1, minWidth: 14, textAlign: "center",
+        color: correct ? COLORS.ai : COLORS.warn,
+      }}>{correct ? "✓" : "!"}</span>
     </div>
   );
 }
 
 function GaugeArc({ value, max, color, label, sublabel }) {
-  const pct = Math.min(value / max, 1);
+  const safeMax = Math.max(max, 1);
+  const pct = Math.min(value / safeMax, 1);
   const angle = pct * 180;
   const r = 52, cx = 70, cy = 68;
   const startAngle = 180;
@@ -75,74 +101,167 @@ function GaugeArc({ value, max, color, label, sublabel }) {
   );
 }
 
+const initialStats = () => ({
+  total: 0,
+  blocked: 0,
+  allowed: 0,
+  tp: 0, fp: 0, tn: 0, fn: 0,
+  errors: 0,
+  ruleSrc: 0, aiSrc: 0, fallbackSrc: 0, noneSrc: 0,
+  latencies: [],
+  lastDetectionLatency: null,
+});
+
 export default function SimulationPanel() {
-  const [trafficMode, setTrafficMode] = useState("normal");
-  const [sliderVal, setSliderVal] = useState(50);
-  const [results, setResults] = useState([]);
-  const [sending, setSending] = useState(false);
-  const [stats, setStats] = useState({ total: 0, malicious: 0, safe: 0, avgLatency: 0, latencies: [] });
-  const logRef = useRef(null);
+  const [trafficMode, setTrafficMode] = useState("normal");      // normal | attack
+  const [sliderVal, setSliderVal] = useState(50);                // 0-100
+  const [budgetMs, setBudgetMs] = useState(50);                  // detection latency budget
+  const [results, setResults] = useState([]);                    // recent N entries
+  const [stats, setStats] = useState(initialStats);
+  const [busy, setBusy] = useState(false);                       // disable buttons during one-shot
+  const [bursting, setBursting] = useState(false);               // burst-test in progress
+  const [errorMsg, setErrorMsg] = useState(null);
+  const burstAbort = useRef(false);
 
   const sliderMode = sliderVal <= 30 ? "rule" : sliderVal >= 70 ? "ai" : "hybrid";
-
-  function sendRequest() {
-    if (sending) return;
-    setSending(true);
-    setTimeout(() => {
-      const isAttack = trafficMode === "attack";
-      let system, latency, isMal;
-
-      if (sliderMode === "rule") {
-        system = "Rule-Based";
-        latency = Math.round(6 + Math.random() * 6);
-        isMal = isAttack ? Math.random() < 0.68 : Math.random() < 0.05;
-      } else if (sliderMode === "ai") {
-        system = "AI-Based";
-        latency = Math.round(100 + Math.random() * 40);
-        isMal = isAttack ? Math.random() < 0.94 : Math.random() < 0.008;
-      } else {
-        const useAI = isAttack ? Math.random() < 0.7 : Math.random() < 0.25;
-        system = useAI ? "AI-Based" : "Rule-Based";
-        latency = useAI ? Math.round(100 + Math.random() * 40) : Math.round(6 + Math.random() * 6);
-        isMal = isAttack ? Math.random() < (useAI ? 0.94 : 0.68) : Math.random() < 0.01;
-      }
-
-      const entry = { result: isMal ? "Malicious" : "Safe", system, latency, traffic: isAttack ? "attack" : "normal", ts: Date.now() };
-
-      setResults(prev => [entry, ...prev].slice(0, 30));
-      setStats(prev => {
-        const newLatencies = [...prev.latencies, latency].slice(-50);
-        const avg = Math.round(newLatencies.reduce((a, b) => a + b, 0) / newLatencies.length);
-        return {
-          total: prev.total + 1,
-          malicious: prev.malicious + (isMal ? 1 : 0),
-          safe: prev.safe + (isMal ? 0 : 1),
-          avgLatency: avg,
-          latencies: newLatencies,
-        };
-      });
-      setSending(false);
-    }, 300 + Math.random() * 200);
-  }
-
   const modeLabel = sliderMode === "rule" ? "Rule-Based" : sliderMode === "ai" ? "AI-Based" : "Hybrid";
   const modeColor = sliderMode === "rule" ? COLORS.rule : sliderMode === "ai" ? COLORS.ai : COLORS.warn;
 
-  const malRate = stats.total > 0 ? Math.round((stats.malicious / stats.total) * 100) : 0;
+  const accuracy = useMemo(() => {
+    const t = stats.tp + stats.tn + stats.fp + stats.fn;
+    return t === 0 ? 0 : Math.round(((stats.tp + stats.tn) / t) * 100);
+  }, [stats]);
+
+  const recordResult = useCallback((entry) => {
+    setResults((prev) => [entry, ...prev].slice(0, 40));
+    setStats((prev) => {
+      const next = { ...prev };
+      next.total += 1;
+      if (entry.error) {
+        next.errors += 1;
+        return next;
+      }
+      const blocked = entry.decision === "block";
+      if (blocked) next.blocked += 1; else next.allowed += 1;
+
+      if (entry.groundTruth === "malicious" && blocked) next.tp += 1;
+      else if (entry.groundTruth === "legitimate" && blocked) next.fp += 1;
+      else if (entry.groundTruth === "legitimate" && !blocked) next.tn += 1;
+      else if (entry.groundTruth === "malicious" && !blocked) next.fn += 1;
+
+      if (entry.decisionSource === "rule") next.ruleSrc += 1;
+      else if (entry.decisionSource === "ai") next.aiSrc += 1;
+      else if (entry.decisionSource === "fallback") next.fallbackSrc += 1;
+      else next.noneSrc += 1;
+
+      if (entry.detectionLatencyMs != null) {
+        next.latencies = [...prev.latencies, entry.detectionLatencyMs].slice(-200);
+        next.lastDetectionLatency = entry.detectionLatencyMs;
+      }
+      return next;
+    });
+  }, []);
+
+  const fireOne = useCallback(async () => {
+    setErrorMsg(null);
+    const isAttack = trafficMode === "attack";
+    const scenario = isAttack ? pick(MALICIOUS) : pick(LEGITIMATE);
+    const groundTruth = isAttack ? "malicious" : "legitimate";
+    const mode = sliderModeToHeader(sliderMode);
+
+    const result = await sendDetectionRequest({
+      scenario,
+      mode,
+      budgetMs,
+      groundTruth,
+    });
+
+    const entry = {
+      label: scenario.label,
+      decision: result.decision,
+      decisionSource: result.decisionSource,
+      detectionLatencyMs: result.detectionLatencyMs,
+      clientLatencyMs: result.clientLatencyMs,
+      groundTruth,
+      mode,
+      ts: Date.now(),
+      error: result.ok ? null : result.error,
+    };
+
+    if (!result.ok) setErrorMsg(`Request failed: ${result.error}`);
+    recordResult(entry);
+  }, [trafficMode, sliderMode, budgetMs, recordResult]);
+
+  const handleSend = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    try { await fireOne(); } finally { setBusy(false); }
+  }, [busy, fireOne]);
+
+  const handleBurst = useCallback(async () => {
+    if (bursting) {
+      burstAbort.current = true;
+      return;
+    }
+    setBursting(true);
+    burstAbort.current = false;
+    setErrorMsg(null);
+
+    const N = 30;
+    const concurrency = 4;
+    const queue = Array.from({ length: N }, (_, i) => i);
+
+    const worker = async () => {
+      while (queue.length > 0 && !burstAbort.current) {
+        queue.shift();
+        await fireOne();
+        // small jitter so the rule-server's burst detector can fire reasonably
+        await new Promise((r) => setTimeout(r, 60 + Math.random() * 80));
+      }
+    };
+
+    await Promise.all(Array.from({ length: concurrency }, worker));
+    setBursting(false);
+  }, [bursting, fireOne]);
+
+  const handleClear = () => {
+    setResults([]);
+    setStats(initialStats());
+    setErrorMsg(null);
+  };
+
+  const blockRate = stats.total > 0 ? Math.round(((stats.blocked) / stats.total) * 100) : 0;
+  const avgLatency = stats.latencies.length > 0
+    ? Math.round((stats.latencies.reduce((a, b) => a + b, 0) / stats.latencies.length) * 10) / 10
+    : 0;
 
   return (
     <div style={{ padding: "28px 32px", overflowY: "auto", height: "100%", fontFamily: "'IBM Plex Mono', monospace" }}>
 
-      <div style={{ marginBottom: 28 }}>
+      <div style={{ marginBottom: 20 }}>
         <div style={{ fontSize: 11, color: modeColor, letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 6 }}>
-          <StatusDot active color={modeColor} /> &nbsp;{modeLabel} MODE
+          <StatusDot active color={modeColor} /> &nbsp;{modeLabel} MODE · BUDGET {budgetMs}ms
         </div>
         <h2 style={{ fontSize: 22, fontWeight: 700, color: "#F0F2F8", fontFamily: "'Syne', sans-serif", letterSpacing: "-0.02em", margin: 0 }}>
           Simulation Panel
         </h2>
-        <p style={{ color: "#6B7280", fontSize: 13, marginTop: 4 }}>Send synthetic API traffic and observe detection behavior live</p>
+        <p style={{ color: "#6B7280", fontSize: 13, marginTop: 4 }}>
+          Live traffic to the rule-based-server · run id&nbsp;
+          <code style={{ color: "#9CA3AF", fontSize: 12 }}>{RUN_ID}</code>
+        </p>
       </div>
 
+      {errorMsg && (
+        <div style={{
+          marginBottom: 16, padding: "10px 14px", borderRadius: 10,
+          background: "rgba(248,113,113,0.06)", border: "1px solid rgba(248,113,113,0.2)",
+          color: COLORS.danger, fontSize: 12,
+        }}>
+          {errorMsg}
+        </div>
+      )}
+
+      {/* Controls */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
 
         <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 16, padding: 22 }}>
@@ -161,16 +280,27 @@ export default function SimulationPanel() {
               </button>
             ))}
           </div>
-          <button onClick={sendRequest} disabled={sending} style={{
-            width: "100%", padding: "13px 0", borderRadius: 12, fontSize: 13, fontWeight: 700,
-            fontFamily: "'Syne', sans-serif", cursor: sending ? "not-allowed" : "pointer",
-            background: sending ? "rgba(255,255,255,0.05)" : `linear-gradient(135deg, ${modeColor}cc, ${modeColor}88)`,
-            border: `1px solid ${modeColor}44`, color: sending ? "#4B5563" : "#fff",
-            letterSpacing: "0.05em", transition: "all 0.2s",
-            transform: sending ? "scale(0.98)" : "scale(1)",
-          }}>
-            {sending ? "Processing..." : "▶ Send Request"}
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={handleSend} disabled={busy || bursting} style={{
+              flex: 1, padding: "13px 0", borderRadius: 12, fontSize: 13, fontWeight: 700,
+              fontFamily: "'Syne', sans-serif", cursor: (busy || bursting) ? "not-allowed" : "pointer",
+              background: (busy || bursting) ? "rgba(255,255,255,0.05)" : `linear-gradient(135deg, ${modeColor}cc, ${modeColor}88)`,
+              border: `1px solid ${modeColor}44`, color: (busy || bursting) ? "#4B5563" : "#fff",
+              letterSpacing: "0.05em", transition: "all 0.2s",
+            }}>
+              {busy ? "Sending..." : "▶ Send Request"}
+            </button>
+            <button onClick={handleBurst} style={{
+              flex: 1, padding: "13px 0", borderRadius: 12, fontSize: 12, fontWeight: 700,
+              fontFamily: "'Syne', sans-serif", cursor: "pointer",
+              background: bursting ? `${COLORS.warn}25` : "rgba(255,255,255,0.04)",
+              border: `1px solid ${bursting ? COLORS.warn : "rgba(255,255,255,0.10)"}`,
+              color: bursting ? COLORS.warn : "#9CA3AF",
+              letterSpacing: "0.05em", transition: "all 0.2s",
+            }}>
+              {bursting ? "■ Stop burst" : "◎ Burst x30"}
+            </button>
+          </div>
         </div>
 
         <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 16, padding: 22 }}>
@@ -180,10 +310,10 @@ export default function SimulationPanel() {
             <span>Accuracy Priority</span>
           </div>
           <input type="range" min="0" max="100" step="1" value={sliderVal}
-            onChange={e => setSliderVal(Number(e.target.value))}
+            onChange={(e) => setSliderVal(Number(e.target.value))}
             style={{ width: "100%", accentColor: modeColor, marginBottom: 12 }} />
           <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 14 }}>
-            {[["Rule-Based", "rule", COLORS.rule], ["Hybrid", "hybrid", COLORS.warn], ["AI-Based", "ai", COLORS.ai]].map(([label, key, color]) => (
+            {[["Rule", "rule", COLORS.rule], ["Hybrid", "hybrid", COLORS.warn], ["AI", "ai", COLORS.ai]].map(([label, key, color]) => (
               <span key={key} style={{
                 fontSize: 10, padding: "3px 10px", borderRadius: 20,
                 background: sliderMode === key ? `${color}20` : "rgba(255,255,255,0.04)",
@@ -193,27 +323,60 @@ export default function SimulationPanel() {
               }}>{label}</span>
             ))}
           </div>
-          <div style={{ fontSize: 11, color: "#6B7280", textAlign: "center" }}>
-            Est. latency: <span style={{ color: modeColor }}>
-              {sliderMode === "rule" ? "~8ms" : sliderMode === "ai" ? "~120ms" : "~40ms blend"}
-            </span>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#4B5563", marginTop: 6, marginBottom: 4 }}>
+            <span>Latency Budget</span>
+            <span style={{ color: modeColor }}>{budgetMs} ms</span>
+          </div>
+          <input type="range" min="5" max="500" step="5" value={budgetMs}
+            onChange={(e) => setBudgetMs(Number(e.target.value))}
+            style={{ width: "100%", accentColor: modeColor }} />
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#374151", marginTop: 2 }}>
+            <span>5ms</span><span>250ms</span><span>500ms</span>
           </div>
         </div>
       </div>
 
-      {results.length > 0 && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 20 }}>
-          <GaugeArc value={stats.total} max={Math.max(stats.total, 50)} color={COLORS.rule} label="Total Requests" sublabel="requests" />
-          <GaugeArc value={stats.malicious} max={Math.max(stats.total, 1)} color={COLORS.danger} label="Malicious" sublabel={`${malRate}% rate`} />
-          <GaugeArc value={stats.avgLatency} max={150} color={modeColor} label="Avg Latency" sublabel="ms" />
+      {/* Live KPIs */}
+      {stats.total > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
+          <GaugeArc value={stats.total} max={Math.max(stats.total, 50)} color={COLORS.rule} label="Requests" sublabel="total" />
+          <GaugeArc value={stats.blocked} max={Math.max(stats.total, 1)} color={COLORS.danger} label="Blocked" sublabel={`${blockRate}% rate`} />
+          <GaugeArc value={accuracy} max={100} color={COLORS.ai} label="Accuracy" sublabel="%" />
+          <GaugeArc value={Math.round(avgLatency * 10) / 10} max={Math.max(budgetMs, 50)} color={modeColor} label="Avg detection" sublabel="ms" />
         </div>
       )}
 
+      {/* Confusion Matrix + breakdown */}
+      {stats.total > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: 16, marginBottom: 20 }}>
+          <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 16, padding: 22 }}>
+            <div style={{ fontSize: 11, color: "#8B92A5", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 14 }}>Confusion Matrix (this session)</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 10 }}>
+              <ConfCell label="True Positive" sub="malicious · blocked" value={stats.tp} color={COLORS.ai} />
+              <ConfCell label="False Negative" sub="malicious · allowed" value={stats.fn} color={COLORS.warn} />
+              <ConfCell label="False Positive" sub="legitimate · blocked" value={stats.fp} color={COLORS.danger} />
+              <ConfCell label="True Negative" sub="legitimate · allowed" value={stats.tn} color={COLORS.rule} />
+            </div>
+          </div>
+          <div style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 16, padding: 22 }}>
+            <div style={{ fontSize: 11, color: "#8B92A5", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 14 }}>Decision Source</div>
+            <SourceBar label="Rule engine" value={stats.ruleSrc} total={stats.total} color={COLORS.rule} />
+            <SourceBar label="AI scorer" value={stats.aiSrc} total={stats.total} color={COLORS.ai} />
+            <SourceBar label="Fallback (budget)" value={stats.fallbackSrc} total={stats.total} color={COLORS.warn} />
+            <SourceBar label="None (allowed)" value={stats.noneSrc} total={stats.total} color="#6B7280" />
+            {stats.errors > 0 && (
+              <SourceBar label="Errors" value={stats.errors} total={stats.total} color={COLORS.danger} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Detection Log */}
       <div style={{ background: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 16, padding: 20 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
           <span style={{ fontSize: 11, color: "#8B92A5", letterSpacing: "0.08em", textTransform: "uppercase" }}>Detection Log</span>
           {results.length > 0 && (
-            <button onClick={() => { setResults([]); setStats({ total: 0, malicious: 0, safe: 0, avgLatency: 0, latencies: [] }); }}
+            <button onClick={handleClear}
               style={{ fontSize: 10, color: "#4B5563", background: "none", border: "none", cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace" }}>
               Clear
             </button>
@@ -222,15 +385,45 @@ export default function SimulationPanel() {
         {results.length === 0 ? (
           <div style={{ textAlign: "center", padding: "40px 0", color: "#374151", fontSize: 13 }}>
             <div style={{ fontSize: 28, marginBottom: 10, opacity: 0.4 }}>◈</div>
-            No requests yet. Send traffic to begin simulation.
+            No requests yet. Pick traffic type, choose a mode, and send.
           </div>
         ) : (
-          <div ref={logRef} style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 340, overflowY: "auto" }}>
-            {results.map((r, i) => <ResultEntry key={r.ts + i} entry={r} index={stats.total - 1 - i} />)}
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 360, overflowY: "auto" }}>
+            {results.map((r, i) => <ResultEntry key={r.ts + "-" + i} entry={r} index={stats.total - 1 - i} />)}
           </div>
         )}
       </div>
+    </div>
+  );
+}
 
+function ConfCell({ label, sub, value, color }) {
+  return (
+    <div style={{
+      background: "rgba(255,255,255,0.03)",
+      border: `1px solid ${color}22`,
+      borderLeft: `3px solid ${color}`,
+      borderRadius: 10,
+      padding: "12px 14px",
+    }}>
+      <div style={{ fontSize: 10, color: "#6B7280", letterSpacing: "0.05em", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, color: "#F0F2F8", fontFamily: "'Syne', sans-serif", margin: "4px 0 2px" }}>{value}</div>
+      <div style={{ fontSize: 10, color: color }}>{sub}</div>
+    </div>
+  );
+}
+
+function SourceBar({ label, value, total, color }) {
+  const pct = total > 0 ? (value / total) * 100 : 0;
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+        <span style={{ fontSize: 11, color: "#9CA3AF" }}>{label}</span>
+        <span style={{ fontSize: 11, color }}>{value} · {pct.toFixed(0)}%</span>
+      </div>
+      <div style={{ height: 6, background: "rgba(255,255,255,0.05)", borderRadius: 3, overflow: "hidden" }}>
+        <div style={{ width: `${pct}%`, height: "100%", background: color, transition: "width 0.5s" }} />
+      </div>
     </div>
   );
 }

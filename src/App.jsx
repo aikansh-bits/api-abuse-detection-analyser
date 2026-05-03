@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import AnalysisDashboard from "./AnalysisDashboard";
 import SimulationPanel from "./SimulationPanel";
+import { useApiHealth, useRunSummary } from "./lib/hooks";
+import { RUN_ID } from "./lib/config";
 
 const NAV = [
   {
@@ -40,8 +42,7 @@ function Logo() {
         <div style={{
           width: 34, height: 34, borderRadius: 10,
           background: "linear-gradient(135deg, #4F8EF7 0%, #34D399 100%)",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          flexShrink: 0,
+          display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
         }}>
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
             <path d="M2 14L6 9L10 11L16 4" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -72,8 +73,8 @@ function NavItem({ item, active, onClick }) {
       color: active ? "#4F8EF7" : "#6B7280",
       transition: "all 0.2s",
     }}
-      onMouseEnter={e => { if (!active) e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }}
-      onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}
+      onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }}
+      onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}
     >
       <span style={{ flexShrink: 0 }}>{item.icon}</span>
       <div>
@@ -91,31 +92,104 @@ function NavItem({ item, active, onClick }) {
   );
 }
 
-function StatusBar() {
+function HealthBars({ health, summary }) {
+  // Translate health + summary into 0-100 health percentages.
+  const ruleBar = health.state === "down" ? 0 : health.state === "degraded" ? 70 : 96;
+  const aiBar = !health.ai ? 0
+    : health.aiLatencyMs == null ? 92
+    : health.aiLatencyMs < 50 ? 96
+    : health.aiLatencyMs < 200 ? 86
+    : 70;
+
+  const detP95 = summary?.latencyMs?.detection?.p95 ?? null;
+  // Throughput "health" = how close p95 is to a 200ms reference (lower = better).
+  const throughputBar = detP95 == null ? 80
+    : detP95 < 25 ? 96
+    : detP95 < 75 ? 88
+    : detP95 < 200 ? 70
+    : 45;
+
+  const items = [
+    ["Rule Engine", "#4F8EF7", ruleBar],
+    ["AI Model", "#34D399", aiBar],
+    ["Throughput", "#FBBF24", throughputBar],
+  ];
+
+  return items.map(([label, color, pct]) => (
+    <div key={label} style={{ marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+        <span style={{ fontSize: 10, color: "#6B7280" }}>{label}</span>
+        <span style={{ fontSize: 10, color }}>{pct}%</span>
+      </div>
+      <div style={{ height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 2, overflow: "hidden" }}>
+        <div style={{ width: `${pct}%`, height: "100%", background: color, borderRadius: 2, opacity: 0.85, transition: "width 0.6s" }} />
+      </div>
+    </div>
+  ));
+}
+
+function StatusBar({ health }) {
   const [time, setTime] = useState(new Date().toLocaleTimeString());
-  useState(() => {
+  useEffect(() => {
     const id = setInterval(() => setTime(new Date().toLocaleTimeString()), 1000);
     return () => clearInterval(id);
-  });
+  }, []);
+
+  const { color, label } = useMemo(() => {
+    if (health.state === "ok") return { color: "#34D399", label: "SYSTEM ONLINE" };
+    if (health.state === "degraded") return { color: "#FBBF24", label: "AI DEGRADED" };
+    if (health.state === "waking") return { color: "#A78BFA", label: "WAKING UP…" };
+    return { color: "#F87171", label: "BACKEND DOWN" };
+  }, [health.state]);
+
   return (
-    <div style={{
-      padding: "14px 20px", borderTop: "1px solid rgba(255,255,255,0.06)",
-      display: "flex", flexDirection: "column", gap: 10,
-    }}>
+    <div style={{ padding: "14px 20px", borderTop: "1px solid rgba(255,255,255,0.06)", display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#34D399", boxShadow: "0 0 6px #34D399" }} />
-        <span style={{ fontSize: 10, color: "#34D399", fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.06em" }}>SYSTEM ONLINE</span>
+        <div style={{ width: 6, height: 6, borderRadius: "50%", background: color, boxShadow: `0 0 6px ${color}` }} />
+        <span style={{ fontSize: 10, color, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.06em" }}>{label}</span>
       </div>
       <div style={{ display: "flex", justifyContent: "space-between" }}>
-        <span style={{ fontSize: 10, color: "#374151", fontFamily: "'IBM Plex Mono', monospace" }}>v2.4.1</span>
+        <span style={{ fontSize: 10, color: "#374151", fontFamily: "'IBM Plex Mono', monospace" }}>v1.0.0</span>
         <span style={{ fontSize: 10, color: "#374151", fontFamily: "'IBM Plex Mono', monospace" }}>{time}</span>
       </div>
     </div>
   );
 }
 
+function TopBadges({ health, summary }) {
+  const ruleP95 = summary?.latencyMs?.ruleEngine?.p95;
+  const aiP95 = summary?.latencyMs?.aiCall?.p95;
+
+  const ruleLabel = ruleP95 != null
+    ? `◈ Rule p95: ${formatMs(ruleP95)}`
+    : `◈ Rule: ${health.state === "down" ? "offline" : "ready"}`;
+  const aiLabel = aiP95 != null
+    ? `◉ AI p95: ${formatMs(aiP95)}`
+    : `◉ AI: ${health.ai ? "ready" : "unreachable"}`;
+
+  return (
+    <>
+      <span style={{
+        fontSize: 10, padding: "4px 12px", borderRadius: 20,
+        background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)",
+        color: "#4F8EF7", fontFamily: "'IBM Plex Mono', monospace",
+      }}>{ruleLabel}</span>
+      <span style={{
+        fontSize: 10, padding: "4px 12px", borderRadius: 20,
+        background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)",
+        color: health.ai ? "#34D399" : "#F87171",
+        fontFamily: "'IBM Plex Mono', monospace",
+      }}>{aiLabel}</span>
+    </>
+  );
+}
+
+const formatMs = (v) => v < 10 ? `${v.toFixed(2)}ms` : v < 100 ? `${v.toFixed(1)}ms` : `${Math.round(v)}ms`;
+
 export default function App() {
   const [active, setActive] = useState("analysis");
+  const health = useApiHealth(15_000);
+  const { summary } = useRunSummary(RUN_ID, { intervalMs: 6_000 });
 
   return (
     <>
@@ -153,7 +227,7 @@ export default function App() {
               Navigation
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              {NAV.map(item => (
+              {NAV.map((item) => (
                 <NavItem key={item.id} item={item} active={active === item.id} onClick={() => setActive(item.id)} />
               ))}
             </div>
@@ -162,49 +236,30 @@ export default function App() {
               <div style={{ fontSize: 9, color: "#374151", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 12 }}>
                 System Health
               </div>
-              {[["Rule Engine", "#4F8EF7", 94], ["AI Model", "#34D399", 87], ["Throughput", "#FBBF24", 72]].map(([label, color, pct]) => (
-                <div key={label} style={{ marginBottom: 10 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                    <span style={{ fontSize: 10, color: "#6B7280" }}>{label}</span>
-                    <span style={{ fontSize: 10, color }}>{pct}%</span>
-                  </div>
-                  <div style={{ height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 2, overflow: "hidden" }}>
-                    <div style={{ width: `${pct}%`, height: "100%", background: color, borderRadius: 2, opacity: 0.8 }} />
-                  </div>
-                </div>
-              ))}
+              <HealthBars health={health} summary={summary} />
             </div>
           </div>
 
-          <StatusBar />
+          <StatusBar health={health} />
         </aside>
 
         <main style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-
           <div style={{
             height: 52, flexShrink: 0,
             borderBottom: "1px solid rgba(255,255,255,0.06)",
-            display: "flex", alignItems: "center", paddingLeft: 32, paddingRight: 24,
-            gap: 16,
+            display: "flex", alignItems: "center", paddingLeft: 32, paddingRight: 24, gap: 16,
             background: "rgba(255,255,255,0.01)",
           }}>
             <div>
               <span style={{ fontSize: 14, fontWeight: 700, color: "#F0F2F8", fontFamily: "'Syne', sans-serif" }}>
-                {NAV.find(n => n.id === active)?.label}
+                {NAV.find((n) => n.id === active)?.label}
               </span>
               <span style={{ fontSize: 11, color: "#4B5563", marginLeft: 12 }}>
-                {NAV.find(n => n.id === active)?.desc}
+                {NAV.find((n) => n.id === active)?.desc}
               </span>
             </div>
             <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-              {["◈ Rule-Based: 8ms", "◉ AI-Based: 120ms"].map((label, i) => (
-                <span key={i} style={{
-                  fontSize: 10, padding: "4px 12px", borderRadius: 20,
-                  background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)",
-                  color: i === 0 ? "#4F8EF7" : "#34D399",
-                  fontFamily: "'IBM Plex Mono', monospace",
-                }}>{label}</span>
-              ))}
+              <TopBadges health={health} summary={summary} />
             </div>
           </div>
 
