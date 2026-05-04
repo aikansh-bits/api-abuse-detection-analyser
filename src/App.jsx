@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import AnalysisDashboard from "./AnalysisDashboard";
 import SimulationPanel from "./SimulationPanel";
-import { useApiHealth, useRunSummary } from "./lib/hooks";
-import { RUN_ID } from "./lib/config";
+import { AppDataProvider, useAppData } from "./lib/AppDataContext";
 
 const NAV = [
   {
@@ -187,9 +186,16 @@ function TopBadges({ health, summary }) {
 const formatMs = (v) => v < 10 ? `${v.toFixed(2)}ms` : v < 100 ? `${v.toFixed(1)}ms` : `${Math.round(v)}ms`;
 
 export default function App() {
+  return (
+    <AppDataProvider>
+      <AppShell />
+    </AppDataProvider>
+  );
+}
+
+function AppShell() {
   const [active, setActive] = useState("analysis");
-  const health = useApiHealth(15_000);
-  const { summary } = useRunSummary(RUN_ID, { intervalMs: 6_000 });
+  const { health, summary } = useAppData();
 
   return (
     <>

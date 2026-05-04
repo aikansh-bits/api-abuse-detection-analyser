@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { sendDetectionRequest } from "./lib/api";
 import { LEGITIMATE, MALICIOUS, pick, sliderModeToHeader } from "./lib/scenarios";
 import { RUN_ID } from "./lib/config";
+import { useAppData } from "./lib/AppDataContext";
 
 const COLORS = { rule: "#4F8EF7", ai: "#34D399", danger: "#F87171", warn: "#FBBF24", neutral: "#8B92A5" };
 
@@ -112,6 +113,14 @@ const initialStats = () => ({
   lastDetectionLatency: null,
 });
 
+// Slider value <-> mode mapping. The slider uses 0-100 so the user can fine-tune
+// "speed vs accuracy" feel, but we snap to canonical positions when they click
+// one of the mode pills.
+const MODE_TO_SLIDER = { rule: 10, hybrid: 50, ai: 90 };
+const sliderToMode = (v) => (v <= 30 ? "rule" : v >= 70 ? "ai" : "hybrid");
+
+const BUDGET_PRESETS = [10, 25, 50, 100, 250];
+
 export default function SimulationPanel() {
   const [trafficMode, setTrafficMode] = useState("normal");      // normal | attack
   const [sliderVal, setSliderVal] = useState(50);                // 0-100
@@ -123,7 +132,9 @@ export default function SimulationPanel() {
   const [errorMsg, setErrorMsg] = useState(null);
   const burstAbort = useRef(false);
 
-  const sliderMode = sliderVal <= 30 ? "rule" : sliderVal >= 70 ? "ai" : "hybrid";
+  const { refreshSummary } = useAppData();
+
+  const sliderMode = sliderToMode(sliderVal);
   const modeLabel = sliderMode === "rule" ? "Rule-Based" : sliderMode === "ai" ? "AI-Based" : "Hybrid";
   const modeColor = sliderMode === "rule" ? COLORS.rule : sliderMode === "ai" ? COLORS.ai : COLORS.warn;
 
@@ -195,8 +206,14 @@ export default function SimulationPanel() {
   const handleSend = useCallback(async () => {
     if (busy) return;
     setBusy(true);
-    try { await fireOne(); } finally { setBusy(false); }
-  }, [busy, fireOne]);
+    try {
+      await fireOne();
+      // Push a fresh summary fetch so the dashboard updates immediately.
+      refreshSummary();
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, fireOne, refreshSummary]);
 
   const handleBurst = useCallback(async () => {
     if (bursting) {
@@ -222,7 +239,8 @@ export default function SimulationPanel() {
 
     await Promise.all(Array.from({ length: concurrency }, worker));
     setBursting(false);
-  }, [bursting, fireOne]);
+    refreshSummary();
+  }, [bursting, fireOne, refreshSummary]);
 
   const handleClear = () => {
     setResults([]);
@@ -311,17 +329,32 @@ export default function SimulationPanel() {
           </div>
           <input type="range" min="0" max="100" step="1" value={sliderVal}
             onChange={(e) => setSliderVal(Number(e.target.value))}
-            style={{ width: "100%", accentColor: modeColor, marginBottom: 12 }} />
+            style={{ width: "100%", accentColor: modeColor, marginBottom: 12, cursor: "pointer" }} />
           <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 14 }}>
-            {[["Rule", "rule", COLORS.rule], ["Hybrid", "hybrid", COLORS.warn], ["AI", "ai", COLORS.ai]].map(([label, key, color]) => (
-              <span key={key} style={{
-                fontSize: 10, padding: "3px 10px", borderRadius: 20,
-                background: sliderMode === key ? `${color}20` : "rgba(255,255,255,0.04)",
-                color: sliderMode === key ? color : "#4B5563",
-                border: `1px solid ${sliderMode === key ? color + "44" : "transparent"}`,
-                transition: "all 0.3s",
-              }}>{label}</span>
-            ))}
+            {[["Rule", "rule", COLORS.rule], ["Hybrid", "hybrid", COLORS.warn], ["AI", "ai", COLORS.ai]].map(([label, key, color]) => {
+              const active = sliderMode === key;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setSliderVal(MODE_TO_SLIDER[key])}
+                  style={{
+                    fontSize: 10, padding: "4px 12px", borderRadius: 20,
+                    background: active ? `${color}25` : "rgba(255,255,255,0.04)",
+                    color: active ? color : "#9CA3AF",
+                    border: `1px solid ${active ? color : "rgba(255,255,255,0.08)"}`,
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    transition: "all 0.2s",
+                  }}
+                  onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = "rgba(255,255,255,0.07)"; }}
+                  onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#4B5563", marginTop: 6, marginBottom: 4 }}>
             <span>Latency Budget</span>
@@ -329,9 +362,32 @@ export default function SimulationPanel() {
           </div>
           <input type="range" min="5" max="500" step="5" value={budgetMs}
             onChange={(e) => setBudgetMs(Number(e.target.value))}
-            style={{ width: "100%", accentColor: modeColor }} />
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#374151", marginTop: 2 }}>
-            <span>5ms</span><span>250ms</span><span>500ms</span>
+            style={{ width: "100%", accentColor: modeColor, cursor: "pointer" }} />
+          <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 10 }}>
+            {BUDGET_PRESETS.map((ms) => {
+              const active = budgetMs === ms;
+              return (
+                <button
+                  key={ms}
+                  type="button"
+                  onClick={() => setBudgetMs(ms)}
+                  style={{
+                    fontSize: 10, padding: "3px 10px", borderRadius: 14,
+                    background: active ? `${modeColor}25` : "rgba(255,255,255,0.04)",
+                    color: active ? modeColor : "#9CA3AF",
+                    border: `1px solid ${active ? modeColor : "rgba(255,255,255,0.08)"}`,
+                    fontFamily: "'IBM Plex Mono', monospace",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    transition: "all 0.2s",
+                  }}
+                  onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = "rgba(255,255,255,0.07)"; }}
+                  onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "rgba(255,255,255,0.04)"; }}
+                >
+                  {ms}ms
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
