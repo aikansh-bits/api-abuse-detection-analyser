@@ -206,8 +206,37 @@ function AppShell() {
         ::-webkit-scrollbar { width: 4px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
-        input[type=range] { -webkit-appearance: none; appearance: none; height: 5px; border-radius: 3px; background: rgba(255,255,255,0.1); outline: none; }
-        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%; cursor: pointer; }
+
+        /* Range slider — fully custom so the thumb is clearly visible on the dark theme. */
+        .range-slider {
+          -webkit-appearance: none; appearance: none;
+          width: 100%; height: 6px; border-radius: 999px;
+          outline: none; cursor: pointer;
+          /* The track fill is set inline via background:linear-gradient(...) */
+        }
+        .range-slider::-webkit-slider-thumb {
+          -webkit-appearance: none; appearance: none;
+          width: 18px; height: 18px; border-radius: 50%;
+          background: #F0F2F8;
+          border: 3px solid var(--thumb-color, #4F8EF7);
+          cursor: grab;
+          box-shadow: 0 0 0 4px rgba(255,255,255,0.04), 0 2px 6px rgba(0,0,0,0.4);
+          transition: transform 0.15s, box-shadow 0.15s;
+        }
+        .range-slider::-webkit-slider-thumb:hover { transform: scale(1.1); }
+        .range-slider::-webkit-slider-thumb:active { cursor: grabbing; transform: scale(1.15); }
+        .range-slider::-moz-range-thumb {
+          width: 18px; height: 18px; border-radius: 50%;
+          background: #F0F2F8;
+          border: 3px solid var(--thumb-color, #4F8EF7);
+          cursor: grab;
+          box-shadow: 0 0 0 4px rgba(255,255,255,0.04), 0 2px 6px rgba(0,0,0,0.4);
+        }
+        .range-slider::-moz-range-track {
+          background: transparent;
+          height: 6px; border-radius: 999px;
+        }
+
         button { outline: none; }
       `}</style>
 

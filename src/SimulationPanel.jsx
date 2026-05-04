@@ -327,9 +327,16 @@ export default function SimulationPanel() {
             <span>Speed Priority</span>
             <span>Accuracy Priority</span>
           </div>
-          <input type="range" min="0" max="100" step="1" value={sliderVal}
+          <input
+            type="range" min="0" max="100" step="1" value={sliderVal}
             onChange={(e) => setSliderVal(Number(e.target.value))}
-            style={{ width: "100%", accentColor: modeColor, marginBottom: 12, cursor: "pointer" }} />
+            className="range-slider"
+            style={{
+              marginBottom: 12,
+              "--thumb-color": modeColor,
+              background: `linear-gradient(to right, ${modeColor} 0%, ${modeColor} ${sliderVal}%, rgba(255,255,255,0.10) ${sliderVal}%, rgba(255,255,255,0.10) 100%)`,
+            }}
+          />
           <div style={{ display: "flex", justifyContent: "center", gap: 8, marginBottom: 14 }}>
             {[["Rule", "rule", COLORS.rule], ["Hybrid", "hybrid", COLORS.warn], ["AI", "ai", COLORS.ai]].map(([label, key, color]) => {
               const active = sliderMode === key;
@@ -360,9 +367,15 @@ export default function SimulationPanel() {
             <span>Latency Budget</span>
             <span style={{ color: modeColor }}>{budgetMs} ms</span>
           </div>
-          <input type="range" min="5" max="500" step="5" value={budgetMs}
+          <input
+            type="range" min="5" max="500" step="5" value={budgetMs}
             onChange={(e) => setBudgetMs(Number(e.target.value))}
-            style={{ width: "100%", accentColor: modeColor, cursor: "pointer" }} />
+            className="range-slider"
+            style={{
+              "--thumb-color": modeColor,
+              background: `linear-gradient(to right, ${modeColor} 0%, ${modeColor} ${((budgetMs - 5) / 495) * 100}%, rgba(255,255,255,0.10) ${((budgetMs - 5) / 495) * 100}%, rgba(255,255,255,0.10) 100%)`,
+            }}
+          />
           <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 10 }}>
             {BUDGET_PRESETS.map((ms) => {
               const active = budgetMs === ms;
