@@ -11,12 +11,23 @@
  * timestamped so it sorts naturally in the metrics directory.
  */
 
-const DEFAULT_LOCAL = "http://localhost:3000";
+const DEFAULT_LOCAL_RULE = "http://localhost:3000";
+const DEFAULT_LOCAL_AI = "http://localhost:8000";
 
 const stripTrailingSlash = (s) => (s || "").replace(/\/+$/, "");
 
 export const API_BASE = stripTrailingSlash(
-  process.env.REACT_APP_RULE_API || DEFAULT_LOCAL,
+  process.env.REACT_APP_RULE_API || DEFAULT_LOCAL_RULE,
+);
+
+/**
+ * Optional direct URL for the AI server. The frontend never makes detection
+ * calls to it — those always route through the rule server — but knowing the
+ * URL lets us send a parallel warmup ping on app mount, so both Render
+ * services cold-start simultaneously instead of waking up serially.
+ */
+export const AI_API = stripTrailingSlash(
+  process.env.REACT_APP_AI_API || DEFAULT_LOCAL_AI,
 );
 
 const randId = () =>
