@@ -198,7 +198,17 @@ export default function SimulationPanel() {
       error: result.ok ? null : result.error,
     };
 
-    if (!result.ok) setErrorMsg(`Request failed: ${result.error}`);
+    if (!result.ok) {
+      // We retried once internally; if we still failed, surface a friendlier
+      // message that distinguishes transient network hiccups from real bugs.
+      const friendly =
+        result.error === "timeout"
+          ? "Request timed out — the rule server may still be cold-starting on Render. Try again in a few seconds."
+          : result.error === "network_error" || result.error === "Failed to fetch"
+            ? "Network error — check your connection (the request was retried once and still failed)."
+            : `Request failed: ${result.error}`;
+      setErrorMsg(friendly);
+    }
     recordResult(entry);
   }, [trafficMode, sliderMode, budgetMs, recordResult]);
 
