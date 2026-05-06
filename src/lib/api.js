@@ -14,14 +14,6 @@ import { API_BASE, RUN_ID } from "./config";
  *      and let callers display a "waking up" state.
  */
 
-class HttpError extends Error {
-  constructor(status, body, message) {
-    super(message || `HTTP ${status}`);
-    this.status = status;
-    this.body = body;
-  }
-}
-
 const buildUrl = (path) => {
   if (path.startsWith("http")) return path;
   return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
@@ -68,10 +60,13 @@ const request = async (path, { method = "GET", headers = {}, body, timeoutMs = 3
       requestId: res.headers.get("x-request-id"),
     };
 
-    if (!res.ok && res.status !== 429) {
-      throw new HttpError(res.status, json, `HTTP ${res.status}: ${path}`);
-    }
-
+    // Note: we intentionally do NOT throw on non-2xx HTTP statuses. A 401 from
+    // /api/login with a bad password, a 429 from the detection pipeline
+    // blocking a malicious request, or a 400 from /api/payment with an
+    // invalid amount are all *legitimate recordable outcomes* of the
+    // simulation — not infrastructure failures. Only network-level errors
+    // (fetch rejection: timeout, CORS, DNS) are treated as failures, and
+    // those throw out of fetch() naturally.
     return { status: res.status, ok: res.ok, body: json, clientLatencyMs, expose };
   } finally {
     clearTimeout(timer);

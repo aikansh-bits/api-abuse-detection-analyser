@@ -253,7 +253,7 @@ export default function AnalysisDashboard() {
 
   return (
     <div style={{ padding: "28px 32px", overflowY: "auto", height: "100%", fontFamily: "'IBM Plex Mono', monospace" }}>
-      <div style={{ marginBottom: 22 }}>
+      {/* <div style={{ marginBottom: 22 }}>
         <div style={{ fontSize: 11, color: COLORS.rule, letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 6 }}>
           ● LIVE · {new Date().toLocaleTimeString()}
         </div>
@@ -264,10 +264,10 @@ export default function AnalysisDashboard() {
           Real-time accuracy & latency metrics, computed server-side from the JSONL log.
           API: <code style={{ color: "#9CA3AF" }}>{API_BASE}</code>
         </p>
-      </div>
+      </div> */}
 
       {/* Run picker */}
-      <div style={{
+      {/* <div style={{
         display: "flex", alignItems: "center", gap: 10, marginBottom: 18,
         padding: "10px 14px",
         background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 12,
@@ -289,7 +289,7 @@ export default function AnalysisDashboard() {
         <span style={{ fontSize: 10, color: "#4B5563", marginLeft: "auto" }}>
           {loading ? "loading…" : error ? `error: ${error}` : `${total} records`}
         </span>
-      </div>
+      </div> */}
 
       {/* Summary cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 18 }}>

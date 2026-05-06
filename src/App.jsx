@@ -267,12 +267,12 @@ function AppShell() {
               ))}
             </div>
 
-            <div style={{ marginTop: 28, padding: "0 8px" }}>
+            {/* <div style={{ marginTop: 28, padding: "0 8px" }}>
               <div style={{ fontSize: 9, color: "#374151", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 12 }}>
                 System Health
               </div>
               <HealthBars health={health} summary={summary} />
-            </div>
+            </div> */}
           </div>
 
           <StatusBar health={health} />

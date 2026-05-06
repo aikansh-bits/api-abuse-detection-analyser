@@ -263,10 +263,10 @@ export default function SimulationPanel() {
         <h2 style={{ fontSize: 22, fontWeight: 700, color: "#F0F2F8", fontFamily: "'Syne', sans-serif", letterSpacing: "-0.02em", margin: 0 }}>
           Simulation Panel
         </h2>
-        <p style={{ color: "#6B7280", fontSize: 13, marginTop: 4 }}>
+        {/* <p style={{ color: "#6B7280", fontSize: 13, marginTop: 4 }}>
           Live traffic to the rule-based-server · run id&nbsp;
           <code style={{ color: "#9CA3AF", fontSize: 12 }}>{RUN_ID}</code>
-        </p>
+        </p> */}
       </div>
 
       {errorMsg && (
