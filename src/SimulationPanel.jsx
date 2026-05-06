@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { sendDetectionRequest } from "./lib/api";
 import { LEGITIMATE, MALICIOUS, pick, sliderModeToHeader } from "./lib/scenarios";
-import { RUN_ID } from "./lib/config";
 import { useAppData } from "./lib/AppDataContext";
 
 const COLORS = { rule: "#4F8EF7", ai: "#34D399", danger: "#F87171", warn: "#FBBF24", neutral: "#8B92A5" };

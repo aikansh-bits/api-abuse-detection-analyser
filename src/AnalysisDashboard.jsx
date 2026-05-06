@@ -1,7 +1,5 @@
 import { useEffect, useState } from "react";
 import { useAppData } from "./lib/AppDataContext";
-import { RUN_ID, API_BASE } from "./lib/config";
-import { listRuns, runSummary } from "./lib/api";
 
 const COLORS = {
   rule: "#4F8EF7",
@@ -184,61 +182,9 @@ function fmtPct(v) {
 }
 
 export default function AnalysisDashboard() {
-  const [allRuns, setAllRuns] = useState([]);
-  const [selectedRunId, setSelectedRunId] = useState(RUN_ID);
-
-  // Live run summary comes from the shared context (one polling loop, not two).
-  const { summary: liveSummary, summaryLoading, summaryError } = useAppData();
-
-  // Other-run summaries are fetched once when the user picks them — no polling.
-  const [otherSummary, setOtherSummary] = useState(null);
-  const [otherLoading, setOtherLoading] = useState(false);
-  const [otherError, setOtherError] = useState(null);
-
-  const isLive = selectedRunId === RUN_ID;
-  const summary = isLive ? liveSummary : otherSummary;
-  const loading = isLive ? summaryLoading : otherLoading;
-  const error = isLive ? summaryError : otherError;
-
-  useEffect(() => {
-    if (isLive) {
-      setOtherSummary(null);
-      setOtherError(null);
-      return;
-    }
-    let cancelled = false;
-    setOtherLoading(true);
-    runSummary(selectedRunId)
-      .then((res) => {
-        if (!cancelled) {
-          setOtherSummary(res.body?.data || null);
-          setOtherError(null);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) setOtherError(err.message || "fetch_failed");
-      })
-      .finally(() => {
-        if (!cancelled) setOtherLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [selectedRunId, isLive]);
-
-  // Refresh the run picker every 30 seconds — slow because runs are stable.
-  useEffect(() => {
-    let cancelled = false;
-    const fetchRuns = async () => {
-      try {
-        const res = await listRuns();
-        if (!cancelled) setAllRuns(res.body?.data?.runs || []);
-      } catch {
-        if (!cancelled) setAllRuns([]);
-      }
-    };
-    fetchRuns();
-    const id = setInterval(fetchRuns, 30_000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, []);
+  // The dashboard always shows the live run from this session. The summary
+  // comes from the shared context (one polling loop for the whole app).
+  const { summary, summaryLoading: loading } = useAppData();
 
   const c = summary?.classification;
   const lat = summary?.latencyMs;

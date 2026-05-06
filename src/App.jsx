@@ -91,42 +91,6 @@ function NavItem({ item, active, onClick }) {
   );
 }
 
-function HealthBars({ health, summary }) {
-  // Translate health + summary into 0-100 health percentages.
-  const ruleBar = health.state === "down" ? 0 : health.state === "degraded" ? 70 : 96;
-  const aiBar = !health.ai ? 0
-    : health.aiLatencyMs == null ? 92
-    : health.aiLatencyMs < 50 ? 96
-    : health.aiLatencyMs < 200 ? 86
-    : 70;
-
-  const detP95 = summary?.latencyMs?.detection?.p95 ?? null;
-  // Throughput "health" = how close p95 is to a 200ms reference (lower = better).
-  const throughputBar = detP95 == null ? 80
-    : detP95 < 25 ? 96
-    : detP95 < 75 ? 88
-    : detP95 < 200 ? 70
-    : 45;
-
-  const items = [
-    ["Rule Engine", "#4F8EF7", ruleBar],
-    ["AI Model", "#34D399", aiBar],
-    ["Throughput", "#FBBF24", throughputBar],
-  ];
-
-  return items.map(([label, color, pct]) => (
-    <div key={label} style={{ marginBottom: 10 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-        <span style={{ fontSize: 10, color: "#6B7280" }}>{label}</span>
-        <span style={{ fontSize: 10, color }}>{pct}%</span>
-      </div>
-      <div style={{ height: 4, background: "rgba(255,255,255,0.06)", borderRadius: 2, overflow: "hidden" }}>
-        <div style={{ width: `${pct}%`, height: "100%", background: color, borderRadius: 2, opacity: 0.85, transition: "width 0.6s" }} />
-      </div>
-    </div>
-  ));
-}
-
 function StatusBar({ health }) {
   const [time, setTime] = useState(new Date().toLocaleTimeString());
   useEffect(() => {
